@@ -1,0 +1,203 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <WebServer.h>
+#include <ArduinoJson.h>
+
+/* ========= WiFi ========= */
+const char* ssid = "rayui";
+const char* password = "btxu5549";
+
+/* ========= CWA API ========= */
+String apiKey = "CWA-0A7B9743-AD48-4D5D-B0E9-95EE6380A1E3";
+String baseUrl =
+"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001"
+"?format=JSON&Authorization=" + apiKey;
+
+/* ========= WebServer ========= */
+WebServer server(80);
+
+/* ========= 台灣 22 縣市 ========= */
+String locationNames[22] = {
+  "臺北市","新北市","桃園市","臺中市","臺南市","高雄市",
+  "基隆市","新竹市","嘉義市",
+  "新竹縣","苗栗縣","彰化縣","南投縣","雲林縣",
+  "嘉義縣","屏東縣","宜蘭縣","花蓮縣","臺東縣",
+  "澎湖縣","金門縣","連江縣"
+};
+
+/* ========= 天氣資料 ========= */
+String wx, pop, minT, maxT;
+String weatherIcon, clothingAdvice;
+
+/* ========= WiFi ========= */
+void initWiFi() {
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected");
+  Serial.println(WiFi.localIP());
+}
+
+/* ========= 天氣 icon ========= */
+String getWeatherIcon(String wx) {
+  if (wx.indexOf("雷") >= 0) return "⛈️";
+  if (wx.indexOf("雨") >= 0) return "🌧️";
+  if (wx.indexOf("晴") >= 0 && wx.indexOf("雲") >= 0) return "⛅";
+  if (wx.indexOf("晴") >= 0) return "☀️";
+  return "☁️";
+}
+
+/* ========= 背景色 ========= */
+String getBackgroundColor(String wx) {
+  if (wx.indexOf("雷") >= 0) return "#a2a2a2";
+  if (wx.indexOf("雨") >= 0) return "#87cefa";
+  if (wx.indexOf("晴") >= 0) return "#ffeb3b";
+  return "#d3d3d3";
+}
+
+/* ========= 穿搭建議與雨具 ========= */
+String getClothingAdvice(int minT, int maxT, int pop, String wx) {
+  String advice;
+  if (minT < 15) advice = "厚外套";
+  else if (minT < 20) advice = "薄外套";
+  else if (maxT <= 28) advice = "短袖即可";
+  else advice = "清涼穿著";
+
+  String umbrella;
+  if (pop >= 60) umbrella = "建議攜帶雨具 ☔";
+  else if (pop >= 30 && wx.indexOf("雨") >= 0) umbrella = "可能降雨，建議攜帶雨具 ☔";
+  else if (wx.indexOf("雨") >= 0) umbrella = "天氣不穩定，建議攜帶雨具 ☔";
+  else umbrella = "不需攜帶雨具";
+
+  if (pop >= 50) advice += "，記得帶雨具";
+  advice += " / " + umbrella;
+  return advice;
+}
+
+/* ========= 抓天氣（全抓後比對） ========= */
+bool getWeather(String city) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+
+  if (!http.begin(client, baseUrl)) return false;
+  if (http.GET() != HTTP_CODE_OK) return false;
+
+  DynamicJsonDocument doc(40 * 1024);
+  deserializeJson(doc, http.getString());
+  http.end();
+
+  for (JsonObject loc : doc["records"]["location"].as<JsonArray>()) {
+    if (loc["locationName"].as<String>() == city) {
+      for (JsonObject e : loc["weatherElement"].as<JsonArray>()) {
+        String name = e["elementName"];
+        String value = e["time"][0]["parameter"]["parameterName"].as<String>();
+        if (name == "Wx")   wx = value;
+        if (name == "PoP")  pop = value;
+        if (name == "MinT") minT = value;
+        if (name == "MaxT") maxT = value;
+      }
+      weatherIcon = getWeatherIcon(wx);
+      clothingAdvice = getClothingAdvice(
+        minT.toInt(), maxT.toInt(), pop.toInt(), wx
+      );
+      return true;
+    }
+  }
+  return false;
+}
+
+/* ========= 主頁 ========= */
+void handleRoot() {
+  String html =
+  "<!DOCTYPE html><html lang='zh-TW'><head>"
+  "<meta charset='utf-8'>"
+  "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+  "<title>台灣天氣</title>"
+  "<style>"
+  "body{font-family:sans-serif;text-align:center;transition:0.5s;}"
+  "select{font-size:18px;padding:6px;margin:10px;border-radius:8px;}"
+  ".card{background:#fff;padding:20px;margin:20px auto;width:90%;max-width:400px;"
+  "border-radius:12px;box-shadow:0 4px 10px rgba(0,0,0,0.2);}"
+  "h1{margin-top:20px;color:#333;}"
+  "p{font-size:18px;margin:8px 0;}"
+  ".icon{font-size:72px;margin:10px 0;}"
+  "</style></head><body>";
+
+  html += "<h1>台灣各縣市天氣</h1>";
+  html += "<select id='citySel' onchange='loadWeather(this.value)'>";
+  for (int i = 0; i < 22; i++) {
+    html += "<option value='" + locationNames[i] + "'>" + locationNames[i] + "</option>";
+  }
+  html += "</select>";
+  html += "<div id='out'></div>";
+
+  html += "<script>"
+  "function loadWeather(city){"
+  "fetch('/weather?city='+city)"
+  ".then(r=>r.json())"
+  ".then(d=>{"
+  "document.body.style.background='" + getBackgroundColor("晴") + "';" // 初始背景
+  "let bg='#d3d3d3';"
+  "if(d.wx.indexOf('雨')>=0) bg='#87cefa';"
+  "else if(d.wx.indexOf('雷')>=0) bg='#a2a2a2';"
+  "else if(d.wx.indexOf('晴')>=0) bg='#ffeb3b';"
+  "document.body.style.background=bg;"
+  "document.getElementById('out').innerHTML="
+  "`<div class='card'>"
+  "<h2>${city}</h2>"
+  "<div class='icon'>${d.icon}</div>"
+  "<p>天氣：${d.wx}</p>"
+  "<p>降雨率：${d.pop}%</p>"
+  "<p>溫度：${d.minT} ~ ${d.maxT} °C</p>"
+  "<p><b>穿搭建議：</b> ${d.advice.split(' / ')[0]}</p>"
+  "<p><b>雨具建議：</b> ${d.advice.split(' / ')[1]}</p>"
+  "</div>`;"
+  "});} "
+  "window.onload=function(){"
+  "const sel=document.getElementById('citySel');"
+  "loadWeather(sel.value);"
+  "};"
+  "</script></body></html>";
+
+  server.send(200, "text/html", html);
+}
+
+/* ========= API ========= */
+void handleWeather() {
+  if (!server.hasArg("city")) {
+    server.send(400, "text/plain", "city missing");
+    return;
+  }
+  if (!getWeather(server.arg("city"))) {
+    server.send(404, "text/plain", "not found");
+    return;
+  }
+
+  String json = "{";
+  json += "\"wx\":\"" + wx + "\",";
+  json += "\"icon\":\"" + weatherIcon + "\",";
+  json += "\"pop\":\"" + pop + "\",";
+  json += "\"minT\":\"" + minT + "\",";
+  json += "\"maxT\":\"" + maxT + "\",";
+  json += "\"advice\":\"" + clothingAdvice + "\"}";
+  server.send(200, "application/json", json);
+}
+
+/* ========= setup / loop ========= */
+void setup() {
+  Serial.begin(115200);
+  initWiFi();
+  server.on("/", handleRoot);
+  server.on("/weather", handleWeather);
+  server.begin();
+  Serial.println("Web Server Started");
+}
+
+void loop() {
+  server.handleClient();
+}
