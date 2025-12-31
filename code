@@ -4,21 +4,22 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 
-/* ========= WiFi ========= */
+/* ===== WiFi 設定 ===== */
 const char* ssid = "rayui";
 const char* password = "btxu5549";
 
-/* ========= CWA API ========= */
-String apiKey = "CWA-0A7B9743-AD48-4D5D-B0E9-95EE6380A1E3";
-String baseUrl =
-"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001"
-"?format=JSON&Authorization=" + apiKey;
+/* ===== API URL ===== */
+String cwaUrl =
+"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?format=JSON&Authorization=CWA-0A7B9743-AD48-4D5D-B0E9-95EE6380A1E3";
 
-/* ========= WebServer ========= */
+String aqiBaseUrl =
+"https://data.moenv.gov.tw/api/v2/aqx_p_488?api_key=bccbe9ea-82d6-4a9c-af55-5d4b8a2872c2&format=JSON&limit=50";
+
+/* ===== Web Server ===== */
 WebServer server(80);
 
-/* ========= 台灣 22 縣市 ========= */
-String locationNames[22] = {
+/* ===== 台灣縣市 ===== */
+String cities[22] = {
   "臺北市","新北市","桃園市","臺中市","臺南市","高雄市",
   "基隆市","新竹市","嘉義市",
   "新竹縣","苗栗縣","彰化縣","南投縣","雲林縣",
@@ -26,178 +27,232 @@ String locationNames[22] = {
   "澎湖縣","金門縣","連江縣"
 };
 
-/* ========= 天氣資料 ========= */
-String wx, pop, minT, maxT;
-String weatherIcon, clothingAdvice;
+/* ===== 天氣資料 ===== */
+String wx="無資料", pop="0", minT="--", maxT="--", weatherIcon="❓", clothingAdvice="無資料";
 
-/* ========= WiFi ========= */
-void initWiFi() {
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi connected");
-  Serial.println(WiFi.localIP());
+/* ===== AQI 資料 ===== */
+struct AQIRecord {
+  String sitename;
+  int aqi;
+  String status;
+  String time;
+};
+
+#define MAX_STATIONS 50
+AQIRecord aqiRecords[MAX_STATIONS];
+int aqiCount = 0;
+
+/* ===== LED 設定（單顆 Neopixel） ===== */
+#define RGB_LED_PIN 48
+void setLEDColor(uint8_t r, uint8_t g, uint8_t b) {
+  neopixelWrite(RGB_LED_PIN, r, g, b);
+}
+void updateLEDByAQI(int aqi){
+  if      (aqi <= 50)  setLEDColor(0,255,0);
+  else if (aqi <=100)  setLEDColor(255,255,0);
+  else if (aqi <=150)  setLEDColor(255,165,0);
+  else if (aqi <=200)  setLEDColor(255,0,0);
+  else if (aqi <=300)  setLEDColor(128,0,128);
+  else                 setLEDColor(139,69,19);
 }
 
-/* ========= 天氣 icon ========= */
-String getWeatherIcon(String wx) {
-  if (wx.indexOf("雷") >= 0) return "⛈️";
-  if (wx.indexOf("雨") >= 0) return "🌧️";
-  if (wx.indexOf("晴") >= 0 && wx.indexOf("雲") >= 0) return "⛅";
-  if (wx.indexOf("晴") >= 0) return "☀️";
+/* ===== WiFi ===== */
+bool wifiConnected=false;
+void initWiFi() {
+  WiFi.begin(ssid, password);
+  int timeout = 0;
+  while (WiFi.status() != WL_CONNECTED && timeout < 30) { // 最多 15 秒
+    delay(500);
+    Serial.print(".");
+    timeout++;
+  }
+  if(WiFi.status()==WL_CONNECTED){
+    wifiConnected=true;
+    Serial.println("WiFi 已連線");
+  } else {
+    wifiConnected=false;
+    Serial.println("WiFi 連線失敗");
+  }
+}
+
+/* ===== 天氣 icon ===== */
+String getWeatherIcon(String wx){
+  if(wx.indexOf("雷")>=0) return "⛈️";
+  if(wx.indexOf("雨")>=0) return "🌧️";
+  if(wx.indexOf("晴")>=0 && wx.indexOf("雲")>=0) return "⛅";
+  if(wx.indexOf("晴")>=0) return "☀️";
   return "☁️";
 }
 
-/* ========= 背景色 ========= */
-String getBackgroundColor(String wx) {
-  if (wx.indexOf("雷") >= 0) return "#a2a2a2";
-  if (wx.indexOf("雨") >= 0) return "#87cefa";
-  if (wx.indexOf("晴") >= 0) return "#ffeb3b";
-  return "#d3d3d3";
-}
-
-/* ========= 穿搭建議與雨具 ========= */
-String getClothingAdvice(int minT, int maxT, int pop, String wx) {
+/* ===== 穿搭建議 ===== */
+String getClothingAdvice(int minT,int maxT,int pop){
   String advice;
-  if (minT < 15) advice = "厚外套";
-  else if (minT < 20) advice = "薄外套";
-  else if (maxT <= 28) advice = "短袖即可";
-  else advice = "清涼穿著";
-
-  String umbrella;
-  if (pop >= 60) umbrella = "建議攜帶雨具 ☔";
-  else if (pop >= 30 && wx.indexOf("雨") >= 0) umbrella = "可能降雨，建議攜帶雨具 ☔";
-  else if (wx.indexOf("雨") >= 0) umbrella = "天氣不穩定，建議攜帶雨具 ☔";
-  else umbrella = "不需攜帶雨具";
-
-  if (pop >= 50) advice += "，記得帶雨具";
-  advice += " / " + umbrella;
+  if(minT<15) advice="厚外套";
+  else if(minT<20) advice="薄外套";
+  else if(maxT<=28) advice="短袖即可";
+  else advice="清涼穿著";
+  if(pop>=50) advice+="，記得帶雨具 ☔";
   return advice;
 }
 
-/* ========= 抓天氣（全抓後比對） ========= */
-bool getWeather(String city) {
-  WiFiClientSecure client;
+/* ===== 抓天氣 ===== */
+void getWeather(String city){
+  wx="無資料"; pop="0"; minT="--"; maxT="--"; weatherIcon="❓"; clothingAdvice="無資料";
+  WiFiClientSecure client; 
+  client.setInsecure(); // ESP32 忽略證書
+  HTTPClient http;
+
+  if(!http.begin(client,cwaUrl)) return;
+  if(http.GET()!=HTTP_CODE_OK){http.end(); return;}
+
+  DynamicJsonDocument doc(40*1024);
+  deserializeJson(doc,http.getString());
+  http.end();
+
+  for(JsonObject loc:doc["records"]["location"].as<JsonArray>()){
+    if(loc["locationName"].as<String>()==city){
+      for(JsonObject e:loc["weatherElement"].as<JsonArray>()){
+        String n=e["elementName"];
+        String v=e["time"][0]["parameter"]["parameterName"].as<String>();
+        if(n=="Wx") wx=v;
+        if(n=="PoP") pop=v;
+        if(n=="MinT") minT=v;
+        if(n=="MaxT") maxT=v;
+      }
+      weatherIcon=getWeatherIcon(wx);
+      clothingAdvice=getClothingAdvice(minT.toInt(),maxT.toInt(),pop.toInt());
+      return;
+    }
+  }
+}
+
+/* ===== 抓 AQI ===== */
+void getAQI(String city){
+  aqiCount=0;
+  WiFiClientSecure client; 
   client.setInsecure();
   HTTPClient http;
 
-  if (!http.begin(client, baseUrl)) return false;
-  if (http.GET() != HTTP_CODE_OK) return false;
+  String url = aqiBaseUrl + "&filters=County,EQ," + city;
+  if(!http.begin(client,url)) return;
+  if(http.GET()!=HTTP_CODE_OK){http.end(); return;}
 
-  DynamicJsonDocument doc(40 * 1024);
-  deserializeJson(doc, http.getString());
+  DynamicJsonDocument doc(80*1024);
+  deserializeJson(doc,http.getString());
   http.end();
 
-  for (JsonObject loc : doc["records"]["location"].as<JsonArray>()) {
-    if (loc["locationName"].as<String>() == city) {
-      for (JsonObject e : loc["weatherElement"].as<JsonArray>()) {
-        String name = e["elementName"];
-        String value = e["time"][0]["parameter"]["parameterName"].as<String>();
-        if (name == "Wx")   wx = value;
-        if (name == "PoP")  pop = value;
-        if (name == "MinT") minT = value;
-        if (name == "MaxT") maxT = value;
-      }
-      weatherIcon = getWeatherIcon(wx);
-      clothingAdvice = getClothingAdvice(
-        minT.toInt(), maxT.toInt(), pop.toInt(), wx
-      );
-      return true;
+  JsonArray records = doc["records"].as<JsonArray>();
+
+  for(JsonObject r:records){
+    String site = r["sitename"].as<String>();
+    String time = r["datacreationdate"].as<String>();
+    int idx=-1;
+    for(int i=0;i<aqiCount;i++) if(aqiRecords[i].sitename==site) idx=i;
+
+    if(idx==-1 && aqiCount<MAX_STATIONS){
+      aqiRecords[aqiCount++] = { site, r["aqi"].as<int>(), r["status"].as<String>(), time };
+    }else if(idx!=-1 && time>aqiRecords[idx].time){
+      aqiRecords[idx].aqi=r["aqi"].as<int>();
+      aqiRecords[idx].status=r["status"].as<String>();
+      aqiRecords[idx].time=time;
     }
   }
-  return false;
 }
 
-/* ========= 主頁 ========= */
-void handleRoot() {
-  String html =
-  "<!DOCTYPE html><html lang='zh-TW'><head>"
-  "<meta charset='utf-8'>"
-  "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-  "<title>台灣天氣</title>"
+/* ===== 找最新 AQI ===== */
+int getLatestAQI(){
+  if(aqiCount==0) return -1;
+  int latest=0;
+  for(int i=1;i<aqiCount;i++)
+    if(aqiRecords[i].time>aqiRecords[latest].time)
+      latest=i;
+  return aqiRecords[latest].aqi;
+}
+
+/* ===== 主頁 ===== */
+void handleRoot(){
+  String html = "<!DOCTYPE html><html lang='zh-TW'><head>"
+  "<meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
+  "<title>台灣天氣 & AQI</title>"
   "<style>"
-  "body{font-family:sans-serif;text-align:center;transition:0.5s;}"
-  "select{font-size:18px;padding:6px;margin:10px;border-radius:8px;}"
-  ".card{background:#fff;padding:20px;margin:20px auto;width:90%;max-width:400px;"
-  "border-radius:12px;box-shadow:0 4px 10px rgba(0,0,0,0.2);}"
-  "h1{margin-top:20px;color:#333;}"
-  "p{font-size:18px;margin:8px 0;}"
-  ".icon{font-size:72px;margin:10px 0;}"
-  "</style></head><body>";
+  "body{font-family:'Segoe UI',sans-serif;background:linear-gradient(135deg,#e3f2fd,#f4f6f8);margin:0;padding:10px;} "
+  "h2{text-align:center} "
+  ".card{background:#fff;border-radius:14px;padding:14px;margin-top:10px;box-shadow:0 4px 10px rgba(0,0,0,.12);} "
+  "select{width:100%;padding:10px;font-size:16px;border-radius:10px;text-align:center;text-align-last:center;} "
+  "option{text-align:center;} "
+  ".weather-main{text-align:center;font-size:22px;} "
+  ".weather-sub{text-align:center;color:#555;} "
+  "table{width:100%;border-collapse:collapse;margin-top:8px;} "
+  "th,td{border:1px solid #ccc;padding:6px;text-align:center;} "
+  "th{background:#eceff1;} "
+  ".selected{outline:2px solid #2196F3;}"
+  "</style></head><body>"
+  "<h2>🌤️ 台灣天氣 & 空氣品質</h2>"
+  "<div class='card'><b>WiFi 狀態: </b>" + String(wifiConnected ? "已連線" : "未連線") + "</div>"
+  "<div class='card'><select id='citySel' onchange='updateAll()'>";
 
-  html += "<h1>台灣各縣市天氣</h1>";
-  html += "<select id='citySel' onchange='loadWeather(this.value)'>";
-  for (int i = 0; i < 22; i++) {
-    html += "<option value='" + locationNames[i] + "'>" + locationNames[i] + "</option>";
-  }
-  html += "</select>";
-  html += "<div id='out'></div>";
-
-  html += "<script>"
-  "function loadWeather(city){"
-  "fetch('/weather?city='+city)"
-  ".then(r=>r.json())"
-  ".then(d=>{"
-  "document.body.style.background='" + getBackgroundColor("晴") + "';" // 初始背景
-  "let bg='#d3d3d3';"
-  "if(d.wx.indexOf('雨')>=0) bg='#87cefa';"
-  "else if(d.wx.indexOf('雷')>=0) bg='#a2a2a2';"
-  "else if(d.wx.indexOf('晴')>=0) bg='#ffeb3b';"
-  "document.body.style.background=bg;"
-  "document.getElementById('out').innerHTML="
-  "`<div class='card'>"
-  "<h2>${city}</h2>"
-  "<div class='icon'>${d.icon}</div>"
-  "<p>天氣：${d.wx}</p>"
-  "<p>降雨率：${d.pop}%</p>"
-  "<p>溫度：${d.minT} ~ ${d.maxT} °C</p>"
-  "<p><b>穿搭建議：</b> ${d.advice.split(' / ')[0]}</p>"
-  "<p><b>雨具建議：</b> ${d.advice.split(' / ')[1]}</p>"
-  "</div>`;"
-  "});} "
-  "window.onload=function(){"
-  "const sel=document.getElementById('citySel');"
-  "loadWeather(sel.value);"
-  "};"
+  for(int i=0;i<22;i++) html += "<option>"+cities[i]+"</option>";
+  html += "</select></div><div class='card' id='weather'></div><div class='card' id='aqi'></div>"
+  "<script>"
+  "function aqiColor(a){if(a<=50)return'#4caf50';if(a<=100)return'#ffeb3b';if(a<=150)return'#ff9800';if(a<=200)return'#f44336';return'#9c27b0';}"
+  "function updateAll(){fetch('/data?city='+citySel.value).then(r=>r.json()).then(d=>{"
+  "weather.innerHTML=`<div class='weather-main'>${d.icon} ${d.wx}</div><div class='weather-sub'>🌡️ ${d.minT}~${d.maxT}°C<br>👕 ${d.clothing}</div>`;"
+  "let t='<table><tr><th>測站</th><th>AQI</th><th>狀態</th><th>時間</th></tr>';"
+  "d.aqiRecords.forEach((rec,i)=>{let c=aqiColor(rec.aqi);t+=`<tr id=row${i} onclick=selectRow(${i})><td>${rec.sitename}</td><td style=background:${c}>${rec.aqi}</td><td>${rec.status}</td><td>${rec.time}</td></tr>`;});"
+  "aqi.innerHTML=t+'</table>'; window.data=d;"
+  "if(d.aqiCount>0){let latestIndex=0;for(let j=1;j<d.aqiCount;j++)if(d.aqiRecords[j].time>d.aqiRecords[latestIndex].time)latestIndex=j;setTimeout(()=>{selectRow(latestIndex,true);},50);}"
+  "})}"
+  "function selectRow(index,init=false){if(!window.data)return;"
+  "document.querySelectorAll('tr').forEach(r=>r.classList.remove('selected'));"
+  "document.getElementById('row'+index).classList.add('selected');"
+  "if(!init)fetch('/led?index='+index);}"
+  "window.onload=updateAll;"
   "</script></body></html>";
 
-  server.send(200, "text/html", html);
+  server.send(200,"text/html",html);
 }
 
-/* ========= API ========= */
-void handleWeather() {
-  if (!server.hasArg("city")) {
-    server.send(400, "text/plain", "city missing");
-    return;
-  }
-  if (!getWeather(server.arg("city"))) {
-    server.send(404, "text/plain", "not found");
-    return;
-  }
+/* ===== API ===== */
+void handleData(){
+  String city = server.arg("city");
+  getWeather(city);
+  getAQI(city);
 
-  String json = "{";
-  json += "\"wx\":\"" + wx + "\",";
-  json += "\"icon\":\"" + weatherIcon + "\",";
-  json += "\"pop\":\"" + pop + "\",";
-  json += "\"minT\":\"" + minT + "\",";
-  json += "\"maxT\":\"" + maxT + "\",";
-  json += "\"advice\":\"" + clothingAdvice + "\"}";
-  server.send(200, "application/json", json);
+  int latestAQI = getLatestAQI();
+  if(latestAQI!=-1) updateLEDByAQI(latestAQI);
+
+  String json="{";
+  json+="\"wx\":\""+wx+"\",\"icon\":\""+weatherIcon+"\","; 
+  json+="\"minT\":\""+minT+"\",\"maxT\":\""+maxT+"\","; 
+  json+="\"clothing\":\""+clothingAdvice+"\","; 
+  json+="\"aqiCount\":"+String(aqiCount)+",\"aqiRecords\":[";
+  for(int i=0;i<aqiCount;i++){
+    if(i) json+=",";
+    json+="{\"sitename\":\""+aqiRecords[i].sitename+"\",\"aqi\":"+String(aqiRecords[i].aqi)+",\"status\":\""+aqiRecords[i].status+"\",\"time\":\""+aqiRecords[i].time+"\"}";
+  }
+  json+="]}";
+  server.send(200,"application/json",json);
 }
 
-/* ========= setup / loop ========= */
-void setup() {
+/* ===== LED API ===== */
+void handleLED(){
+  if(!server.hasArg("index")){server.send(400,"text/plain","Missing index");return;}
+  int idx = server.arg("index").toInt();
+  if(idx<0 || idx>=aqiCount){server.send(400,"text/plain","Invalid index");return;}
+  updateLEDByAQI(aqiRecords[idx].aqi);
+  server.send(200,"text/plain","OK");
+}
+
+/* ===== setup / loop ===== */
+void setup(){
   Serial.begin(115200);
   initWiFi();
-  server.on("/", handleRoot);
-  server.on("/weather", handleWeather);
+  server.on("/",handleRoot);
+  server.on("/data",handleData);
+  server.on("/led",handleLED);
   server.begin();
-  Serial.println("Web Server Started");
 }
 
-void loop() {
+void loop(){
   server.handleClient();
 }
