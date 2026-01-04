@@ -28,7 +28,7 @@ String cities[22] = {
 };
 
 /* ===== 天氣資料 ===== */
-String wx = "無資料", pop = "0", minT = "--", maxT = "--", weatherIcon = "❓", clothingAdvice = "無資料";
+String wx = "無資料", pop = "0", minT = "--", maxT = "--", weatherIcon = "?", clothingAdvice = "無資料";
 float apparentTemp = 0.0;
 String comfortText = "無資料";
 
