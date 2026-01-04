@@ -60,20 +60,27 @@ void updateLEDByAQI(int aqi) {
 
 /* ===== WiFi ===== */
 bool wifiConnected = false;
-void initWiFi() {
+void init_wifi() {
+
+  WiFi.mode(WIFI_STA);
+  Serial.printf("Connecting to WiFi: %s ...\n", ssid);
   WiFi.begin(ssid, password);
-  int timeout = 0;
-  while (WiFi.status() != WL_CONNECTED && timeout < 30) {  // 最多 15 秒
+
+  int retry = 0;
+  while (WiFi.status() != WL_CONNECTED && retry < 30) {
     delay(500);
     Serial.print(".");
-    timeout++;
+    retry++;
   }
+
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
-    Serial.println("WiFi 已連線");
+    Serial.println("\nWiFi Connected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
   } else {
     wifiConnected = false;
-    Serial.println("WiFi 連線失敗");
+    Serial.println("\nWiFi Connection Failed!");
   }
 }
 
@@ -117,7 +124,7 @@ void getWeather(String city) {
   comfortText = "無資料";
 
   WiFiClientSecure client;
-  client.setInsecure();  
+  client.setInsecure();
   HTTPClient http;
 
   if (!http.begin(client, cwaUrl)) return;
@@ -287,7 +294,7 @@ void handleLED() {
 /* ===== setup / loop ===== */
 void setup() {
   Serial.begin(115200);
-  initWiFi();
+  init_wifi();
   server.on("/", handleRoot);
   server.on("/data", handleData);
   server.on("/led", handleLED);
