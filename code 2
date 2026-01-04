@@ -154,7 +154,7 @@ void getWeather(String city) {
       maxT = maxVal;
       weatherIcon = getWeatherIcon(wx);
       clothingAdvice = getClothingAdvice(minT.toInt(), maxT.toInt(), pop.toInt());
-      apparentTemp = (minT.toInt() + maxT.toInt()) / 2.0;  // 簡單取平均當舒適溫度
+      apparentTemp = (minT.toInt() + maxT.toInt()) / 2.0; 
       comfortText = getComfort(apparentTemp);
       return;
     }
