@@ -44,7 +44,7 @@ struct AQIRecord {
 AQIRecord aqiRecords[MAX_STATIONS];
 int aqiCount = 0;
 
-/* ===== LED 設定（單顆 Neopixel） ===== */
+/* ===== LED 設定 ===== */
 #define RGB_LED_PIN 48
 void setLEDColor(uint8_t r, uint8_t g, uint8_t b) {
   neopixelWrite(RGB_LED_PIN, r, g, b);
@@ -118,7 +118,7 @@ void getWeather(String city) {
   pop = "0";
   minT = "--";
   maxT = "--";
-  weatherIcon = "❓";
+  weatherIcon = "?";
   clothingAdvice = "無資料";
   apparentTemp = 0;
   comfortText = "無資料";
